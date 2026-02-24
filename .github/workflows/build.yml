@@ -1,0 +1,79 @@
+name: Build and Package WordPress Plugin
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install composer dependencies
+        run: composer install --no-dev --optimize-autoloader
+
+      - name: Minify JavaScript
+        run: npx --yes terser assets/admin.js --compress --mangle --output assets/admin.js
+
+      - name: Minify CSS
+        run: npx --yes clean-css-cli --output assets/admin.css assets/admin.css
+
+      - name: Get version
+        id: get_version
+        run: |
+          version=$(awk -F ': ' '/\* Version/{print $2}' hayfutbol.php | tr -d '[:space:]')
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Create zip
+        run: |
+          mkdir -p build
+          zip -r build/hayfutbol.zip . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x ".claude/*" \
+            -x "node_modules/*" \
+            -x "build/*" \
+            -x "CLAUDE.md" \
+            -x "AGENTS.md"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hayfutbol.zip
+          path: build/hayfutbol.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hayfutbol.zip
+          path: build
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: "v${{ env.VERSION }}"
+          files: build/hayfutbol.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

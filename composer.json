@@ -1,0 +1,19 @@
+{
+    "name": "alexrivas/hayfutbol",
+    "description": "Verifica si la web esta sufriendo bloqueos en Cloudflare por cuestiones de LaLiga y deshabilita el proxy de Cloudflare para evitar bloqueos.",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "HayFutbol\\": "classes/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Alex Rivas",
+            "email": "alex@alexrivas.net"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {
+    }
+}
