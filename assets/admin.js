@@ -141,19 +141,28 @@
         if ( ! records || ! records.length ) {
             return '<p>No se encontraron registros A.</p>';
         }
-        var rows = records.map(function (r) {
-            return '<tr>'
-                + '<td><strong>' + $('<span>').text(r.name).html() + '</strong></td>'
-                + '<td>' + $('<span>').text(r.content).html() + '</td>'
-                + '<td>' + (r.proxied ? 'Activo' : 'Inactivo') + '</td>'
-                + '<td><button type="button" class="button button-small hayfutbol-select-record"'
-                + ' data-id="' + $('<span>').text(r.id).html() + '">Seleccionar</button></td>'
-                + '</tr>';
+
+        var $table = $('<table class="widefat fixed striped" style="margin-top:6px;font-size:13px">')
+            .append('<thead><tr><th>Dominio</th><th>IP</th><th>Proxy</th><th></th></tr></thead>');
+        var $tbody = $('<tbody>');
+
+        records.forEach(function (r) {
+            var $row = $('<tr>');
+            $row.append( $('<td>').append( $('<strong>').text(r.name) ) );
+            $row.append( $('<td>').text(r.content) );
+            $row.append( $('<td>').text(r.proxied ? 'Activo' : 'Inactivo') );
+            $row.append(
+                $('<td>').append(
+                    $('<button type="button" class="button button-small hayfutbol-select-record">')
+                        .attr('data-id', r.id)
+                        .text('Seleccionar')
+                )
+            );
+            $tbody.append($row);
         });
-        return '<table class="widefat fixed striped" style="margin-top:6px;font-size:13px">'
-            + '<thead><tr><th>Dominio</th><th>IP</th><th>Proxy</th><th></th></tr></thead>'
-            + '<tbody>' + rows.join('') + '</tbody>'
-            + '</table>';
+
+        $table.append($tbody);
+        return $table.prop('outerHTML');
     }
 
     $(document).on('click', '.hayfutbol-select-record', function () {

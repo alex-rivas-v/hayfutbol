@@ -15,6 +15,14 @@ class Encryption {
 
     const KEY_OPTION = 'hayfutbol_encryption_key';
 
+    /**
+     * Returns true when the key is stored in wp-config.php (preferred),
+     * false when it fell back to the database.
+     */
+    public static function key_is_secure(): bool {
+        return defined( 'HAYFUTBOL_ENCRYPTION_KEY' );
+    }
+
     private static function key(): string {
         if ( defined( 'HAYFUTBOL_ENCRYPTION_KEY' ) ) {
             return substr( hash( 'sha256', HAYFUTBOL_ENCRYPTION_KEY, true ), 0, 32 );
@@ -95,6 +103,14 @@ class Encryption {
     public static function encrypt( string $value ): string {
         $iv        = random_bytes( 16 );
         $encrypted = openssl_encrypt( $value, 'AES-256-CBC', self::key(), OPENSSL_RAW_DATA, $iv );
+
+        if ( false === $encrypted ) {
+            if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+                error_log( 'HayFutbol: openssl_encrypt() failed.' );
+            }
+            return '';
+        }
+
         return base64_encode( $iv . $encrypted );
     }
 

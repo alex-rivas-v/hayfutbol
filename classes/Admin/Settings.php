@@ -44,10 +44,27 @@ class Settings {
      * would double-encrypt the value before storage).
      */
     public function register_settings(): void {
-        register_setting( self::OPTION_GROUP, 'hayfutbol_cf_zone_id',           'sanitize_text_field' );
-        register_setting( self::OPTION_GROUP, 'hayfutbol_cf_record_id',         'sanitize_text_field' );
+        register_setting( self::OPTION_GROUP, 'hayfutbol_cf_zone_id', array(
+            'sanitize_callback' => array( $this, 'sanitize_cf_id' ),
+        ) );
+        register_setting( self::OPTION_GROUP, 'hayfutbol_cf_record_id', array(
+            'sanitize_callback' => array( $this, 'sanitize_cf_id' ),
+        ) );
         register_setting( self::OPTION_GROUP, 'hayfutbol_check_interval',        'absint' );
         register_setting( self::OPTION_GROUP, 'hayfutbol_notification_email',    'sanitize_email' );
+    }
+
+    public function sanitize_cf_id( $value ): string {
+        $value = sanitize_text_field( $value );
+        if ( '' !== $value && ! preg_match( '/^[a-f0-9]{32}$/i', $value ) ) {
+            add_settings_error(
+                'hayfutbol_settings',
+                'invalid_cf_id',
+                __( 'Cloudflare IDs must be 32 hexadecimal characters.', 'hayfutbol' )
+            );
+            return '';
+        }
+        return $value;
     }
 
     public function enqueue_scripts( string $hook_suffix ): void {
@@ -222,6 +239,11 @@ class Settings {
     ------------------------------------------------------------------ */
 
     private function get_cf_proxy_state(): string {
+        $cached = get_transient( 'hayfutbol_proxy_state' );
+        if ( false !== $cached ) {
+            return $cached;
+        }
+
         $token     = Encryption::decrypt( get_option( 'hayfutbol_cf_api_token', '' ) );
         $zone_id   = get_option( 'hayfutbol_cf_zone_id', '' );
         $record_id = get_option( 'hayfutbol_cf_record_id', '' );
@@ -237,7 +259,9 @@ class Settings {
             return '';
         }
 
-        return ! empty( $result['result']['proxied'] ) ? 'active' : 'inactive';
+        $state = ! empty( $result['result']['proxied'] ) ? 'active' : 'inactive';
+        set_transient( 'hayfutbol_proxy_state', $state, 60 );
+        return $state;
     }
 
     private function is_local_hostname( string $hostname ): bool {
@@ -390,14 +414,8 @@ class Settings {
                     </div>
                     <?php if ( $verify_debug && '1' !== $pinger_registered ) : ?>
                         <div class="hf-verify-debug">
-                            <strong>Debug handshake (token recibido en /verify):</strong>
-                            recibido: <code><?php echo esc_html( $verify_debug['received_pfx'] ?? '?' ); ?></code>
-                            (<?php echo (int) ( $verify_debug['received_len'] ?? 0 ); ?> chars)
-                            &nbsp;&mdash;&nbsp;
-                            guardado: <code><?php echo esc_html( $verify_debug['stored_pfx'] ?? '?' ); ?></code>
-                            (<?php echo (int) ( $verify_debug['stored_len'] ?? 0 ); ?> chars)
-                            &nbsp;&mdash;&nbsp;
-                            <?php echo esc_html( $verify_debug['time'] ?? '' ); ?>
+                            <strong>Debug handshake:</strong>
+                            Token mismatch &mdash; <?php echo esc_html( $verify_debug['time'] ?? '' ); ?>
                         </div>
                     <?php endif; ?>
 

@@ -50,10 +50,10 @@ class BlockCheck {
             }
         }
 
-        update_option( 'hayfutbol_last_check',         current_time( 'mysql' ) );
-        update_option( 'hayfutbol_last_check_ip',      implode( ', ', $ips ) );
-        update_option( 'hayfutbol_last_check_blocked', $is_blocked ? '1' : '0' );
-        update_option( 'hayfutbol_hay_partido',        $hay_partido ? '1' : '0' );
+        update_option( 'hayfutbol_last_check',         current_time( 'mysql' ), false );
+        update_option( 'hayfutbol_last_check_ip',      implode( ', ', $ips ), false );
+        update_option( 'hayfutbol_last_check_blocked', $is_blocked ? '1' : '0', false );
+        update_option( 'hayfutbol_hay_partido',        $hay_partido ? '1' : '0', false );
 
         $proxy_paused = '1' === get_option( 'hayfutbol_proxy_paused', '0' );
 
@@ -61,10 +61,18 @@ class BlockCheck {
             return;
         }
 
+        if ( false !== get_transient( 'hayfutbol_toggle_lock' ) ) {
+            return;
+        }
+
         if ( $is_blocked && ! $proxy_paused ) {
+            set_transient( 'hayfutbol_toggle_lock', 1, 30 );
             $this->toggle_proxy( false );
+            delete_transient( 'hayfutbol_toggle_lock' );
         } elseif ( ! $is_blocked && $proxy_paused ) {
+            set_transient( 'hayfutbol_toggle_lock', 1, 30 );
             $this->toggle_proxy( true );
+            delete_transient( 'hayfutbol_toggle_lock' );
         }
     }
 
@@ -83,7 +91,7 @@ class BlockCheck {
             'headers' => array( 'Accept' => 'application/dns-json' ),
         ) );
 
-        if ( is_wp_error( $response ) ) {
+        if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
             return array();
         }
 
@@ -96,7 +104,10 @@ class BlockCheck {
         $ips = array();
         foreach ( $data['Answer'] as $answer ) {
             if ( isset( $answer['type'], $answer['data'] ) && 1 === (int) $answer['type'] ) {
-                $ips[] = trim( $answer['data'] );
+                $ip = trim( $answer['data'] );
+                if ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ) {
+                    $ips[] = $ip;
+                }
             }
         }
 
@@ -112,7 +123,7 @@ class BlockCheck {
     private function fetch_blocked_ips(): ?array {
         $response = wp_remote_get( self::STATUS_URL, array( 'timeout' => 10 ) );
 
-        if ( is_wp_error( $response ) ) {
+        if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
             return null;
         }
 
