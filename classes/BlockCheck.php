@@ -173,6 +173,16 @@ class BlockCheck {
             return;
         }
 
+        if ( ! $enable && ! $this->origin_ssl_ok() ) {
+            update_option( 'hayfutbol_last_cf_error',
+                'Proxy no desactivado: el servidor origen no tiene un certificado SSL valido. '
+                . 'Instala un certificado (p.ej. Let\'s Encrypt) para que el plugin pueda actuar.',
+                false
+            );
+            $this->notify_ssl_failure();
+            return;
+        }
+
         $api    = new Cloudflare\Api( $token, $zone_id );
         $result = $api->set_proxy( $record_id, $enable );
 
@@ -209,6 +219,60 @@ class BlockCheck {
         $body = $enable
             ? sprintf( "El proxy de Cloudflare en %s ha sido reactivado automaticamente porque la IP ya no aparece en el listado de bloqueos.\n\nSitio: %s", $site, home_url() )
             : sprintf( "El proxy de Cloudflare en %s ha sido desactivado automaticamente porque la IP %s aparece en el listado de bloqueos.\n\nSitio: %s", $site, $ip, home_url() );
+
+        wp_mail( $to, $subject, $body );
+    }
+
+    /**
+     * Checks whether the origin server has a valid public SSL certificate
+     * by making a direct HTTPS request to home_url. The result is cached
+     * for one hour to avoid repeated checks during every cron run.
+     */
+    private function origin_ssl_ok(): bool {
+        $cached = get_transient( 'hayfutbol_origin_ssl_ok' );
+        if ( false !== $cached ) {
+            return '1' === $cached;
+        }
+
+        $hostname = parse_url( home_url(), PHP_URL_HOST );
+        if ( ! $hostname ) {
+            return false;
+        }
+
+        $response = wp_remote_get( 'https://' . $hostname, array(
+            'timeout'   => 10,
+            'sslverify' => true,
+            'headers'   => array( 'Host' => $hostname ),
+        ) );
+
+        $ok = ! is_wp_error( $response );
+        set_transient( 'hayfutbol_origin_ssl_ok', $ok ? '1' : '0', HOUR_IN_SECONDS );
+        update_option( 'hayfutbol_origin_ssl_ok', $ok ? '1' : '0', false );
+
+        return $ok;
+    }
+
+    private function notify_ssl_failure(): void {
+        $to = get_option( 'hayfutbol_notification_email', '' );
+        if ( ! $to ) {
+            $to = get_option( 'admin_email' );
+        }
+        if ( ! is_email( $to ) ) {
+            return;
+        }
+
+        $site = get_bloginfo( 'name' );
+        $subject = sprintf( '[%s] ACCION REQUERIDA: tu servidor no tiene SSL propio', $site );
+        $body = sprintf(
+            "Hay Futbol ha detectado un bloqueo en tu IP pero NO ha desactivado el proxy de Cloudflare "
+            . "porque tu servidor origen no tiene un certificado SSL valido.\n\n"
+            . "Sin un certificado propio (por ejemplo Let's Encrypt), desactivar el proxy "
+            . "dejaria tu sitio sin HTTPS y los visitantes verian un error de seguridad.\n\n"
+            . "Para que el plugin pueda protegerte automaticamente, instala un certificado SSL "
+            . "en tu servidor de hosting y luego cambia el modo SSL de Cloudflare a \"Full (Strict)\".\n\n"
+            . "Sitio: %s",
+            home_url()
+        );
 
         wp_mail( $to, $subject, $body );
     }

@@ -20,11 +20,17 @@ $options = array(
     'hayfutbol_pinger_registered',
     'hayfutbol_pinger_last_error',
     'hayfutbol_verify_debug',
+    'hayfutbol_origin_ssl_ok',
 );
 
 foreach ( $options as $option ) {
     delete_option( $option );
 }
+
+delete_transient( 'hayfutbol_origin_ssl_ok' );
+delete_transient( 'hayfutbol_cf_ssl_mode' );
+delete_transient( 'hayfutbol_proxy_state' );
+delete_transient( 'hayfutbol_toggle_lock' );
 
 $timestamp = wp_next_scheduled( 'hayfutbol_check' );
 if ( $timestamp ) {

@@ -264,6 +264,30 @@ class Settings {
         return $state;
     }
 
+    /**
+     * Retrieves the Cloudflare SSL mode for the configured zone.
+     * Cached for 1 hour to avoid excessive API calls.
+     */
+    private function get_cf_ssl_mode(): ?string {
+        $cached = get_transient( 'hayfutbol_cf_ssl_mode' );
+        if ( false !== $cached ) {
+            return '' === $cached ? null : $cached;
+        }
+
+        $token   = Encryption::decrypt( get_option( 'hayfutbol_cf_api_token', '' ) );
+        $zone_id = get_option( 'hayfutbol_cf_zone_id', '' );
+
+        if ( ! $token || ! $zone_id ) {
+            return null;
+        }
+
+        $api  = new Api( $token, $zone_id );
+        $mode = $api->get_ssl_mode();
+
+        set_transient( 'hayfutbol_cf_ssl_mode', $mode ?? '', HOUR_IN_SECONDS );
+        return $mode;
+    }
+
     private function is_local_hostname( string $hostname ): bool {
         if ( in_array( $hostname, array( 'localhost', '127.0.0.1', '::1' ), true ) ) {
             return true;
@@ -315,6 +339,12 @@ class Settings {
         $partido_class = '' === $hay_partido ? 'is-neutral' : ( '1' === $hay_partido ? 'is-blocked' : 'is-ok' );
         $partido_text  = '' === $hay_partido ? 'Sin datos' : ( '1' === $hay_partido ? 'Sí' : 'No' );
 
+        $origin_ssl    = get_option( 'hayfutbol_origin_ssl_ok', '' );
+        $ssl_class     = '' === $origin_ssl ? 'is-neutral' : ( '1' === $origin_ssl ? 'is-ok' : 'is-blocked' );
+        $ssl_text      = '' === $origin_ssl ? 'Sin verificar' : ( '1' === $origin_ssl ? 'Valido' : 'No detectado' );
+
+        $ssl_mode      = $this->get_cf_ssl_mode();
+
         $ips = $last_ip ? array_values( array_filter( array_map( 'trim', explode( ',', $last_ip ) ) ) ) : array();
 
         $pinger_registered = get_option( PingerClient::STATUS_OPTION, '' );
@@ -339,6 +369,32 @@ class Settings {
             <?php if ( $cf_error ) : ?>
                 <div class="notice notice-error is-dismissible">
                     <p><strong>Error de Cloudflare:</strong> <?php echo esc_html( $cf_error ); ?></p>
+                </div>
+            <?php endif; ?>
+
+            <?php if ( '0' === $origin_ssl ) : ?>
+                <div class="notice notice-error">
+                    <p>
+                        <strong>SSL del servidor origen no detectado.</strong>
+                        El plugin no desactivara el proxy de Cloudflare mientras tu servidor no tenga
+                        un certificado SSL valido (p.ej. Let's Encrypt), ya que hacerlo dejaria tu sitio
+                        sin HTTPS. Contacta a tu proveedor de hosting para instalar un certificado.
+                    </p>
+                </div>
+            <?php endif; ?>
+
+            <?php if ( $ssl_mode && in_array( $ssl_mode, array( 'off', 'flexible' ), true ) ) : ?>
+                <div class="notice notice-warning">
+                    <p>
+                        <strong>Modo SSL de Cloudflare: <?php echo esc_html( ucfirst( $ssl_mode ) ); ?></strong> &mdash;
+                        <?php if ( 'off' === $ssl_mode ) : ?>
+                            Tu zona no tiene SSL activado en Cloudflare. El plugin no podra mantener HTTPS al desactivar el proxy.
+                        <?php else : ?>
+                            El modo "Flexible" significa que Cloudflare conecta a tu servidor sin cifrado.
+                            Cambia a "Full" o "Full (Strict)" e instala un certificado en tu servidor para
+                            que el sitio funcione con HTTPS aunque el proxy se desactive.
+                        <?php endif; ?>
+                    </p>
                 </div>
             <?php endif; ?>
 
@@ -379,6 +435,12 @@ class Settings {
                     <div class="hf-stat__label">¿Hay fútbol?</div>
                     <div class="hf-stat__value <?php echo esc_attr( $partido_class ); ?>">
                         <?php echo esc_html( $partido_text ); ?>
+                    </div>
+                </div>
+                <div class="hf-stat">
+                    <div class="hf-stat__label">SSL origen</div>
+                    <div class="hf-stat__value <?php echo esc_attr( $ssl_class ); ?>">
+                        <?php echo esc_html( $ssl_text ); ?>
                     </div>
                 </div>
             </div>
