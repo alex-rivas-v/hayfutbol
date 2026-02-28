@@ -46,6 +46,21 @@ class Api {
     }
 
     /**
+     * Returns the current SSL mode for the zone (off, flexible, full, strict).
+     *
+     * @return string|null  The mode value, or null on failure.
+     */
+    public function get_ssl_mode(): ?string {
+        $result = $this->request( 'GET', "/zones/{$this->zone_id}/settings/ssl" );
+
+        if ( is_wp_error( $result ) || empty( $result['success'] ) ) {
+            return null;
+        }
+
+        return $result['result']['value'] ?? null;
+    }
+
+    /**
      * Lists all A records for the zone. No hostname filter is applied so this
      * works regardless of the WordPress home_url (including local environments).
      *

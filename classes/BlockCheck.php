@@ -50,10 +50,10 @@ class BlockCheck {
             }
         }
 
-        update_option( 'hayfutbol_last_check',         current_time( 'mysql' ) );
-        update_option( 'hayfutbol_last_check_ip',      implode( ', ', $ips ) );
-        update_option( 'hayfutbol_last_check_blocked', $is_blocked ? '1' : '0' );
-        update_option( 'hayfutbol_hay_partido',        $hay_partido ? '1' : '0' );
+        update_option( 'hayfutbol_last_check',         current_time( 'mysql' ), false );
+        update_option( 'hayfutbol_last_check_ip',      implode( ', ', $ips ), false );
+        update_option( 'hayfutbol_last_check_blocked', $is_blocked ? '1' : '0', false );
+        update_option( 'hayfutbol_hay_partido',        $hay_partido ? '1' : '0', false );
 
         $proxy_paused = '1' === get_option( 'hayfutbol_proxy_paused', '0' );
 
@@ -61,10 +61,18 @@ class BlockCheck {
             return;
         }
 
+        if ( false !== get_transient( 'hayfutbol_toggle_lock' ) ) {
+            return;
+        }
+
         if ( $is_blocked && ! $proxy_paused ) {
+            set_transient( 'hayfutbol_toggle_lock', 1, 30 );
             $this->toggle_proxy( false );
+            delete_transient( 'hayfutbol_toggle_lock' );
         } elseif ( ! $is_blocked && $proxy_paused ) {
+            set_transient( 'hayfutbol_toggle_lock', 1, 30 );
             $this->toggle_proxy( true );
+            delete_transient( 'hayfutbol_toggle_lock' );
         }
     }
 
@@ -83,7 +91,7 @@ class BlockCheck {
             'headers' => array( 'Accept' => 'application/dns-json' ),
         ) );
 
-        if ( is_wp_error( $response ) ) {
+        if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
             return array();
         }
 
@@ -96,7 +104,10 @@ class BlockCheck {
         $ips = array();
         foreach ( $data['Answer'] as $answer ) {
             if ( isset( $answer['type'], $answer['data'] ) && 1 === (int) $answer['type'] ) {
-                $ips[] = trim( $answer['data'] );
+                $ip = trim( $answer['data'] );
+                if ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4 ) ) {
+                    $ips[] = $ip;
+                }
             }
         }
 
@@ -112,7 +123,7 @@ class BlockCheck {
     private function fetch_blocked_ips(): ?array {
         $response = wp_remote_get( self::STATUS_URL, array( 'timeout' => 10 ) );
 
-        if ( is_wp_error( $response ) ) {
+        if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
             return null;
         }
 
@@ -162,6 +173,16 @@ class BlockCheck {
             return;
         }
 
+        if ( ! $enable && ! $this->origin_ssl_ok() ) {
+            update_option( 'hayfutbol_last_cf_error',
+                'Proxy no desactivado: el servidor origen no tiene un certificado SSL valido. '
+                . 'Instala un certificado (p.ej. Let\'s Encrypt) para que el plugin pueda actuar.',
+                false
+            );
+            $this->notify_ssl_failure();
+            return;
+        }
+
         $api    = new Cloudflare\Api( $token, $zone_id );
         $result = $api->set_proxy( $record_id, $enable );
 
@@ -198,6 +219,60 @@ class BlockCheck {
         $body = $enable
             ? sprintf( "El proxy de Cloudflare en %s ha sido reactivado automaticamente porque la IP ya no aparece en el listado de bloqueos.\n\nSitio: %s", $site, home_url() )
             : sprintf( "El proxy de Cloudflare en %s ha sido desactivado automaticamente porque la IP %s aparece en el listado de bloqueos.\n\nSitio: %s", $site, $ip, home_url() );
+
+        wp_mail( $to, $subject, $body );
+    }
+
+    /**
+     * Checks whether the origin server has a valid public SSL certificate
+     * by making a direct HTTPS request to home_url. The result is cached
+     * for one hour to avoid repeated checks during every cron run.
+     */
+    private function origin_ssl_ok(): bool {
+        $cached = get_transient( 'hayfutbol_origin_ssl_ok' );
+        if ( false !== $cached ) {
+            return '1' === $cached;
+        }
+
+        $hostname = parse_url( home_url(), PHP_URL_HOST );
+        if ( ! $hostname ) {
+            return false;
+        }
+
+        $response = wp_remote_get( 'https://' . $hostname, array(
+            'timeout'   => 10,
+            'sslverify' => true,
+            'headers'   => array( 'Host' => $hostname ),
+        ) );
+
+        $ok = ! is_wp_error( $response );
+        set_transient( 'hayfutbol_origin_ssl_ok', $ok ? '1' : '0', HOUR_IN_SECONDS );
+        update_option( 'hayfutbol_origin_ssl_ok', $ok ? '1' : '0', false );
+
+        return $ok;
+    }
+
+    private function notify_ssl_failure(): void {
+        $to = get_option( 'hayfutbol_notification_email', '' );
+        if ( ! $to ) {
+            $to = get_option( 'admin_email' );
+        }
+        if ( ! is_email( $to ) ) {
+            return;
+        }
+
+        $site = get_bloginfo( 'name' );
+        $subject = sprintf( '[%s] ACCION REQUERIDA: tu servidor no tiene SSL propio', $site );
+        $body = sprintf(
+            "Hay Futbol ha detectado un bloqueo en tu IP pero NO ha desactivado el proxy de Cloudflare "
+            . "porque tu servidor origen no tiene un certificado SSL valido.\n\n"
+            . "Sin un certificado propio (por ejemplo Let's Encrypt), desactivar el proxy "
+            . "dejaria tu sitio sin HTTPS y los visitantes verian un error de seguridad.\n\n"
+            . "Para que el plugin pueda protegerte automaticamente, instala un certificado SSL "
+            . "en tu servidor de hosting y luego cambia el modo SSL de Cloudflare a \"Full (Strict)\".\n\n"
+            . "Sitio: %s",
+            home_url()
+        );
 
         wp_mail( $to, $subject, $body );
     }

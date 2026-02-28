@@ -44,10 +44,27 @@ class Settings {
      * would double-encrypt the value before storage).
      */
     public function register_settings(): void {
-        register_setting( self::OPTION_GROUP, 'hayfutbol_cf_zone_id',           'sanitize_text_field' );
-        register_setting( self::OPTION_GROUP, 'hayfutbol_cf_record_id',         'sanitize_text_field' );
+        register_setting( self::OPTION_GROUP, 'hayfutbol_cf_zone_id', array(
+            'sanitize_callback' => array( $this, 'sanitize_cf_id' ),
+        ) );
+        register_setting( self::OPTION_GROUP, 'hayfutbol_cf_record_id', array(
+            'sanitize_callback' => array( $this, 'sanitize_cf_id' ),
+        ) );
         register_setting( self::OPTION_GROUP, 'hayfutbol_check_interval',        'absint' );
         register_setting( self::OPTION_GROUP, 'hayfutbol_notification_email',    'sanitize_email' );
+    }
+
+    public function sanitize_cf_id( $value ): string {
+        $value = sanitize_text_field( $value );
+        if ( '' !== $value && ! preg_match( '/^[a-f0-9]{32}$/i', $value ) ) {
+            add_settings_error(
+                'hayfutbol_settings',
+                'invalid_cf_id',
+                __( 'Cloudflare IDs must be 32 hexadecimal characters.', 'hayfutbol' )
+            );
+            return '';
+        }
+        return $value;
     }
 
     public function enqueue_scripts( string $hook_suffix ): void {
@@ -222,6 +239,11 @@ class Settings {
     ------------------------------------------------------------------ */
 
     private function get_cf_proxy_state(): string {
+        $cached = get_transient( 'hayfutbol_proxy_state' );
+        if ( false !== $cached ) {
+            return $cached;
+        }
+
         $token     = Encryption::decrypt( get_option( 'hayfutbol_cf_api_token', '' ) );
         $zone_id   = get_option( 'hayfutbol_cf_zone_id', '' );
         $record_id = get_option( 'hayfutbol_cf_record_id', '' );
@@ -237,7 +259,33 @@ class Settings {
             return '';
         }
 
-        return ! empty( $result['result']['proxied'] ) ? 'active' : 'inactive';
+        $state = ! empty( $result['result']['proxied'] ) ? 'active' : 'inactive';
+        set_transient( 'hayfutbol_proxy_state', $state, 60 );
+        return $state;
+    }
+
+    /**
+     * Retrieves the Cloudflare SSL mode for the configured zone.
+     * Cached for 1 hour to avoid excessive API calls.
+     */
+    private function get_cf_ssl_mode(): ?string {
+        $cached = get_transient( 'hayfutbol_cf_ssl_mode' );
+        if ( false !== $cached ) {
+            return '' === $cached ? null : $cached;
+        }
+
+        $token   = Encryption::decrypt( get_option( 'hayfutbol_cf_api_token', '' ) );
+        $zone_id = get_option( 'hayfutbol_cf_zone_id', '' );
+
+        if ( ! $token || ! $zone_id ) {
+            return null;
+        }
+
+        $api  = new Api( $token, $zone_id );
+        $mode = $api->get_ssl_mode();
+
+        set_transient( 'hayfutbol_cf_ssl_mode', $mode ?? '', HOUR_IN_SECONDS );
+        return $mode;
     }
 
     private function is_local_hostname( string $hostname ): bool {
@@ -291,6 +339,12 @@ class Settings {
         $partido_class = '' === $hay_partido ? 'is-neutral' : ( '1' === $hay_partido ? 'is-blocked' : 'is-ok' );
         $partido_text  = '' === $hay_partido ? 'Sin datos' : ( '1' === $hay_partido ? 'Sí' : 'No' );
 
+        $origin_ssl    = get_option( 'hayfutbol_origin_ssl_ok', '' );
+        $ssl_class     = '' === $origin_ssl ? 'is-neutral' : ( '1' === $origin_ssl ? 'is-ok' : 'is-blocked' );
+        $ssl_text      = '' === $origin_ssl ? 'Sin verificar' : ( '1' === $origin_ssl ? 'Valido' : 'No detectado' );
+
+        $ssl_mode      = $this->get_cf_ssl_mode();
+
         $ips = $last_ip ? array_values( array_filter( array_map( 'trim', explode( ',', $last_ip ) ) ) ) : array();
 
         $pinger_registered = get_option( PingerClient::STATUS_OPTION, '' );
@@ -315,6 +369,32 @@ class Settings {
             <?php if ( $cf_error ) : ?>
                 <div class="notice notice-error is-dismissible">
                     <p><strong>Error de Cloudflare:</strong> <?php echo esc_html( $cf_error ); ?></p>
+                </div>
+            <?php endif; ?>
+
+            <?php if ( '0' === $origin_ssl ) : ?>
+                <div class="notice notice-error">
+                    <p>
+                        <strong>SSL del servidor origen no detectado.</strong>
+                        El plugin no desactivara el proxy de Cloudflare mientras tu servidor no tenga
+                        un certificado SSL valido (p.ej. Let's Encrypt), ya que hacerlo dejaria tu sitio
+                        sin HTTPS. Contacta a tu proveedor de hosting para instalar un certificado.
+                    </p>
+                </div>
+            <?php endif; ?>
+
+            <?php if ( $ssl_mode && in_array( $ssl_mode, array( 'off', 'flexible' ), true ) ) : ?>
+                <div class="notice notice-warning">
+                    <p>
+                        <strong>Modo SSL de Cloudflare: <?php echo esc_html( ucfirst( $ssl_mode ) ); ?></strong> &mdash;
+                        <?php if ( 'off' === $ssl_mode ) : ?>
+                            Tu zona no tiene SSL activado en Cloudflare. El plugin no podra mantener HTTPS al desactivar el proxy.
+                        <?php else : ?>
+                            El modo "Flexible" significa que Cloudflare conecta a tu servidor sin cifrado.
+                            Cambia a "Full" o "Full (Strict)" e instala un certificado en tu servidor para
+                            que el sitio funcione con HTTPS aunque el proxy se desactive.
+                        <?php endif; ?>
+                    </p>
                 </div>
             <?php endif; ?>
 
@@ -357,6 +437,12 @@ class Settings {
                         <?php echo esc_html( $partido_text ); ?>
                     </div>
                 </div>
+                <div class="hf-stat">
+                    <div class="hf-stat__label">SSL origen</div>
+                    <div class="hf-stat__value <?php echo esc_attr( $ssl_class ); ?>">
+                        <?php echo esc_html( $ssl_text ); ?>
+                    </div>
+                </div>
             </div>
 
             <div class="hf-actions">
@@ -390,14 +476,8 @@ class Settings {
                     </div>
                     <?php if ( $verify_debug && '1' !== $pinger_registered ) : ?>
                         <div class="hf-verify-debug">
-                            <strong>Debug handshake (token recibido en /verify):</strong>
-                            recibido: <code><?php echo esc_html( $verify_debug['received_pfx'] ?? '?' ); ?></code>
-                            (<?php echo (int) ( $verify_debug['received_len'] ?? 0 ); ?> chars)
-                            &nbsp;&mdash;&nbsp;
-                            guardado: <code><?php echo esc_html( $verify_debug['stored_pfx'] ?? '?' ); ?></code>
-                            (<?php echo (int) ( $verify_debug['stored_len'] ?? 0 ); ?> chars)
-                            &nbsp;&mdash;&nbsp;
-                            <?php echo esc_html( $verify_debug['time'] ?? '' ); ?>
+                            <strong>Debug handshake:</strong>
+                            Token mismatch &mdash; <?php echo esc_html( $verify_debug['time'] ?? '' ); ?>
                         </div>
                     <?php endif; ?>
 

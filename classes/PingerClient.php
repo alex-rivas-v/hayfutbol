@@ -21,31 +21,43 @@ class PingerClient {
         register_rest_route( 'hayfutbol/v1', '/verify', array(
             'methods'             => \WP_REST_Server::READABLE,
             'callback'            => array( $this, 'handle_verify' ),
-            'permission_callback' => '__return_true',
+            'permission_callback' => array( $this, 'throttle_verify' ),
+            'show_in_index'       => false,
         ) );
     }
 
     /**
+     * Rate-limits the verify endpoint to one attempt every 5 seconds per IP.
+     */
+    public function throttle_verify(): bool {
+        $ip  = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+        $key = 'hayfutbol_rl_' . md5( $ip );
+
+        if ( false !== get_transient( $key ) ) {
+            return false;
+        }
+
+        set_transient( $key, 1, 5 );
+        return true;
+    }
+
+    /**
      * Responds to the handshake from the pinger during registration.
-     * Expected response: {"verified": true, "token": "<token>"}
      */
     public function handle_verify( \WP_REST_Request $request ): \WP_REST_Response {
         $token  = sanitize_text_field( $request->get_param( 'token' ) );
         $stored = get_option( self::TOKEN_OPTION, '' );
 
-        if ( ! $token || $token !== $stored ) {
+        if ( ! $token || ! $stored || ! hash_equals( $stored, $token ) ) {
             update_option( 'hayfutbol_verify_debug', array(
-                'received_len' => strlen( $token ),
-                'stored_len'   => strlen( $stored ),
-                'received_pfx' => $token  ? substr( $token,  0, 4 ) . '...' : '(empty)',
-                'stored_pfx'   => $stored ? substr( $stored, 0, 4 ) . '...' : '(empty)',
-                'time'         => current_time( 'mysql' ),
+                'match' => false,
+                'time'  => current_time( 'mysql' ),
             ), false );
-            return new \WP_REST_Response( array( 'verified' => false, 'error' => 'Invalid token.' ), 403 );
+            return new \WP_REST_Response( array( 'verified' => false ), 403 );
         }
 
         delete_option( 'hayfutbol_verify_debug' );
-        return new \WP_REST_Response( array( 'verified' => true, 'token' => $token ), 200 );
+        return new \WP_REST_Response( array( 'verified' => true ), 200 );
     }
 
     public function register(): void {

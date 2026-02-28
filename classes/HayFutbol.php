@@ -52,6 +52,28 @@ class HayFutbol {
         if ( is_admin() ) {
             $settings = new Admin\Settings();
             $settings->register();
+            add_action( 'admin_notices', array( $this, 'security_notices' ) );
+        }
+    }
+
+    public function security_notices(): void {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+
+        if ( ! extension_loaded( 'openssl' ) ) {
+            echo '<div class="notice notice-error"><p>';
+            echo '<strong>Hay Futbol:</strong> ';
+            echo esc_html__( 'The openssl PHP extension is required but not loaded. Encryption will not work.', 'hayfutbol' );
+            echo '</p></div>';
+            return;
+        }
+
+        if ( get_option( 'hayfutbol_cf_api_token', '' ) && ! Encryption::key_is_secure() ) {
+            echo '<div class="notice notice-warning is-dismissible"><p>';
+            echo '<strong>Hay Futbol:</strong> ';
+            echo esc_html__( 'The encryption key is stored in the database instead of wp-config.php. This is less secure. Make wp-config.php writable, deactivate and reactivate the plugin.', 'hayfutbol' );
+            echo '</p></div>';
         }
     }
 
